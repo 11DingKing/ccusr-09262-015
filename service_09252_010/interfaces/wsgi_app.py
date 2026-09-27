@@ -77,6 +77,11 @@ class Application:
             ("POST", ("reports", "{report_id}", "exports"), self._export_report),
             ("GET", ("reports", "{report_id}"), self._get_report),
             ("POST", ("grants",), self._create_grant),
+            ("POST", ("projects", "{pid}", "holds"), self._place_hold),
+            ("GET", ("projects", "{pid}", "holds"), self._list_holds),
+            ("POST", ("projects", "{pid}", "purge"), self._purge),
+            ("GET", ("holds", "{hold_id}"), self._get_hold),
+            ("POST", ("holds", "{hold_id}", "release"), self._release_hold),
         ]
 
     def __call__(self, env: dict, start_response) -> list[bytes]:
@@ -290,6 +295,32 @@ class Application:
                       body.get("category", "*"), permission),
             )
         return 201, {"granted": True}
+
+    # ---- 数据保留与法律冻结 ----
+    def _place_hold(self, p: Principal, body: dict, ctx: Context):
+        result = ctx.container.retention.place_hold(
+            p, ctx.match["pid"], reason=body.get("reason", ""),
+            measure=body.get("measure"), period_from=body.get("period_from"),
+            period_to=body.get("period_to"),
+        )
+        return 201, result
+
+    def _list_holds(self, p: Principal, body: dict, ctx: Context):
+        return 200, ctx.container.retention.list_holds(p, ctx.match["pid"])
+
+    def _get_hold(self, p: Principal, body: dict, ctx: Context):
+        return 200, ctx.container.retention.get_hold(p, ctx.match["hold_id"])
+
+    def _release_hold(self, p: Principal, body: dict, ctx: Context):
+        return 200, ctx.container.retention.release_hold(
+            p, ctx.match["hold_id"], approved_by=body.get("approved_by", ""),
+            reason=body.get("reason", ""),
+        )
+
+    def _purge(self, p: Principal, body: dict, ctx: Context):
+        return 200, ctx.container.retention.purge(
+            p, ctx.match["pid"], before_period=body.get("before_period", ""),
+        )
 
 
 def _not_found(message: str):

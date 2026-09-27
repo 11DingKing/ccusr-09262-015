@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from ..domain.errors import NotFoundError, ValidationError
+from ..domain.errors import NotFoundError, StateError, ValidationError
 from ..domain.models import EvidenceSource, ImportBatch, Observation, Principal
 from ..domain.periods import validate_period
 from ..persistence.database import Database
@@ -67,6 +67,21 @@ class ImportService:
                 parsed.append(
                     self._validate_record(store, project_id, raw, i, seen, prev_snapshot)
                 )
+
+            held = store.held_natural_keys(project_id)
+            if held:
+                touched = sorted(
+                    {(r["measure"], r["period"], r["caliber"]) for r in parsed}
+                    & held
+                )
+                if touched:
+                    raise StateError(
+                        "法律冻结期间禁止覆盖命中数据",
+                        detail={"held_keys": [
+                            {"measure": m, "period": p, "caliber": c}
+                            for m, p, c in touched
+                        ]},
+                    )
 
             seq = (prev_seq or 0) + 1
             batch = ImportBatch(

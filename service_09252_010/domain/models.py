@@ -41,6 +41,13 @@ class ReportStatus(str, Enum):
     REJECTED = "rejected"  # 复核驳回（终态）
 
 
+class HoldStatus(str, Enum):
+    """法律冻结的生命周期。"""
+
+    ACTIVE = "active"  # 冻结中：禁止清理或覆盖命中数据
+    RELEASED = "released"  # 已解除（终态），批准人留痕可审计
+
+
 # 计算任务的断点步骤，顺序即执行顺序。
 CALCULATION_STEPS: tuple[str, ...] = ("snapshot", "convert", "aggregate", "persist")
 
@@ -185,6 +192,33 @@ class Grant:
     project_id: str  # "*" 表示全部项目
     category: str  # "*" 表示全部类别
     permission: str  # import / view / calculate / review / export
+
+
+@dataclass(frozen=True)
+class LegalHold:
+    """数据保留与法律冻结：命中数据随冻结原因一并留存。"""
+
+    id: str
+    project_id: str
+    reason: str  # 冻结原因（法务通知依据）
+    status: HoldStatus
+    created_by: str
+    created_at: str
+    released_at: str | None
+    released_by: str | None  # 执行解除的机构
+    approved_by: str | None  # 批准解除的法务负责人（审计要点）
+
+
+@dataclass(frozen=True)
+class LegalHoldItem:
+    """冻结命中的数据行：冻结时刻有效观测的快照，冻结期间不可清理或覆盖。"""
+
+    hold_id: str
+    measure: str
+    period: str
+    caliber: str
+    value: float | None
+    evidence_id: str
 
 
 @dataclass(frozen=True)

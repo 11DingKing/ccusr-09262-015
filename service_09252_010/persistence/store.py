@@ -8,9 +8,12 @@ from ..domain.models import (
     ConversionRule,
     EvidenceSource,
     Grant,
+    HoldStatus,
     ImportBatch,
     Indicator,
     IndicatorVersion,
+    LegalHold,
+    LegalHoldItem,
     Observation,
     Report,
     ReportStatus,
@@ -462,3 +465,117 @@ class Store:
             (report_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- 数据保留与法律冻结 ----
+    def add_legal_hold(self, hold: LegalHold) -> None:
+        self.conn.execute(
+            "INSERT INTO legal_holds (id, project_id, reason, status,"
+            " created_by, created_at, released_at, released_by, approved_by)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (hold.id, hold.project_id, hold.reason, hold.status.value,
+             hold.created_by, hold.created_at, hold.released_at,
+             hold.released_by, hold.approved_by),
+        )
+
+    def get_legal_hold(self, hold_id: str) -> LegalHold | None:
+        row = self.conn.execute(
+            "SELECT * FROM legal_holds WHERE id = ?", (hold_id,)
+        ).fetchone()
+        return self._to_legal_hold(row) if row else None
+
+    def list_legal_holds(self, project_id: str) -> list[LegalHold]:
+        rows = self.conn.execute(
+            "SELECT * FROM legal_holds WHERE project_id = ?"
+            " ORDER BY created_at, id",
+            (project_id,),
+        ).fetchall()
+        return [self._to_legal_hold(r) for r in rows]
+
+    def set_hold_released(self, hold_id: str, released_by: str,
+                          approved_by: str, released_at: str) -> None:
+        self.conn.execute(
+            "UPDATE legal_holds SET status = ?, released_by = ?,"
+            " approved_by = ?, released_at = ? WHERE id = ?",
+            (HoldStatus.RELEASED.value, released_by, approved_by,
+             released_at, hold_id),
+        )
+
+    @staticmethod
+    def _to_legal_hold(row: sqlite3.Row) -> LegalHold:
+        return LegalHold(
+            id=row["id"],
+            project_id=row["project_id"],
+            reason=row["reason"],
+            status=HoldStatus(row["status"]),
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            released_at=row["released_at"],
+            released_by=row["released_by"],
+            approved_by=row["approved_by"],
+        )
+
+    def add_hold_item(self, item: LegalHoldItem) -> None:
+        self.conn.execute(
+            "INSERT INTO legal_hold_items (hold_id, measure, period, caliber,"
+            " value, evidence_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (item.hold_id, item.measure, item.period, item.caliber,
+             item.value, item.evidence_id),
+        )
+
+    def list_hold_items(self, hold_id: str) -> list[LegalHoldItem]:
+        rows = self.conn.execute(
+            "SELECT * FROM legal_hold_items WHERE hold_id = ?"
+            " ORDER BY measure, period, caliber",
+            (hold_id,),
+        ).fetchall()
+        return [LegalHoldItem(**dict(r)) for r in rows]
+
+    def add_hold_event(self, hold_id: str, event: str, actor: str,
+                       approved_by: str | None, reason: str | None,
+                       at: str) -> None:
+        self.conn.execute(
+            "INSERT INTO legal_hold_events (hold_id, event, actor,"
+            " approved_by, reason, at) VALUES (?, ?, ?, ?, ?, ?)",
+            (hold_id, event, actor, approved_by, reason, at),
+        )
+
+    def list_hold_events(self, hold_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT event, actor, approved_by, reason, at"
+            " FROM legal_hold_events WHERE hold_id = ? ORDER BY id",
+            (hold_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def held_natural_keys(self, project_id: str) -> set[tuple[str, str, str]]:
+        """生效中冻结覆盖的自然键集合（measure, period, caliber）。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT i.measure, i.period, i.caliber"
+            " FROM legal_hold_items i"
+            " JOIN legal_holds h ON h.id = i.hold_id"
+            " WHERE h.project_id = ? AND h.status = ?",
+            (project_id, HoldStatus.ACTIVE.value),
+        ).fetchall()
+        return {(r["measure"], r["period"], r["caliber"]) for r in rows}
+
+    def active_hold_items_before(self, project_id: str,
+                                 before_period: str) -> list[dict]:
+        """生效中冻结里期间早于 before_period 的命中行（用于清理拦截）。"""
+        rows = self.conn.execute(
+            "SELECT i.hold_id, i.measure, i.period, i.caliber"
+            " FROM legal_hold_items i"
+            " JOIN legal_holds h ON h.id = i.hold_id"
+            " WHERE h.project_id = ? AND h.status = ? AND i.period < ?"
+            " ORDER BY i.hold_id, i.measure, i.period, i.caliber",
+            (project_id, HoldStatus.ACTIVE.value, before_period),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_observations_before(self, project_id: str,
+                                   before_period: str) -> int:
+        """常规清理：物理删除指定期间之前的观测，返回删除行数。"""
+        cursor = self.conn.execute(
+            "DELETE FROM observations WHERE project_id = ? AND period < ?",
+            (project_id, before_period),
+        )
+        return cursor.rowcount

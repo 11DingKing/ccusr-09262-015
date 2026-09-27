@@ -145,6 +145,35 @@ CREATE TABLE IF NOT EXISTS exports (
     exported_at TEXT NOT NULL,
     digest TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS legal_holds (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    released_at TEXT,
+    released_by TEXT,
+    approved_by TEXT
+);
+CREATE TABLE IF NOT EXISTS legal_hold_items (
+    hold_id TEXT NOT NULL REFERENCES legal_holds(id),
+    measure TEXT NOT NULL,
+    period TEXT NOT NULL,
+    caliber TEXT NOT NULL,
+    value REAL,
+    evidence_id TEXT NOT NULL,
+    PRIMARY KEY (hold_id, measure, period, caliber)
+);
+CREATE TABLE IF NOT EXISTS legal_hold_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hold_id TEXT NOT NULL REFERENCES legal_holds(id),
+    event TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    approved_by TEXT,
+    reason TEXT,
+    at TEXT NOT NULL
+);
 """
 
 

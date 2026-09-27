@@ -155,6 +155,69 @@ class HttpApiTests(unittest.TestCase):
         }, {"X-Institution-Id": "陌生机构"})
         self.assertEqual(status, 403)
 
+    def test_legal_hold_flow(self) -> None:
+        # 证据与数据
+        status, body = call(self.app, "POST", "/evidence", {
+            "project_id": "P1", "kind": "统计年报",
+            "uri": "s3://evidence/h.pdf", "sha256": "f" * 64,
+        }, SUP)
+        self.assertEqual(status, 201, body)
+        evidence_id = body["evidence_id"]
+        status, body = call(self.app, "POST", "/projects/P1/imports", {
+            "records": [
+                {"measure": "m", "period": "2023-06", "caliber": "CN-STD",
+                 "value": 1, "evidence_id": evidence_id},
+                {"measure": "m", "period": "2024-01", "caliber": "CN-STD",
+                 "value": 2, "evidence_id": evidence_id},
+            ],
+        }, SUP)
+        self.assertEqual(status, 201, body)
+
+        # 机构无权操作冻结
+        status, body = call(self.app, "POST", "/projects/P1/holds",
+                            {"reason": "法务冻结通知"}, INST_A)
+        self.assertEqual(status, 403)
+
+        # 登记冻结：命中数据与原因留存
+        status, body = call(self.app, "POST", "/projects/P1/holds", {
+            "reason": "法务冻结通知〔2026〕09 号", "measure": "m",
+        }, SUP)
+        self.assertEqual(status, 201, body)
+        hold_id = body["hold_id"]
+        self.assertEqual(body["hits"], 2)
+
+        # 冻结期间：清理与覆盖均被 409 拒绝
+        status, body = call(self.app, "POST", "/projects/P1/purge",
+                            {"before_period": "2025-01"}, SUP)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "state_error")
+        status, body = call(self.app, "POST", "/projects/P1/imports", {
+            "records": [{"measure": "m", "period": "2024-01",
+                         "caliber": "CN-STD", "value": 99,
+                         "evidence_id": evidence_id}],
+        }, SUP)
+        self.assertEqual(status, 409)
+
+        # 解除必须登记批准人
+        status, body = call(self.app, "POST", f"/holds/{hold_id}/release",
+                            {"approved_by": ""}, SUP)
+        self.assertEqual(status, 422)
+        status, body = call(self.app, "POST", f"/holds/{hold_id}/release",
+                            {"approved_by": "法务专员-李某"}, SUP)
+        self.assertEqual(status, 200, body)
+
+        # 解除后批准人仍可审计，清理放行
+        status, body = call(self.app, "GET", f"/holds/{hold_id}", headers=SUP)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["approved_by"], "法务专员-李某")
+        self.assertEqual([e["event"] for e in body["events"]],
+                         ["placed", "released"])
+        self.assertEqual(body["events"][-1]["approved_by"], "法务专员-李某")
+        status, body = call(self.app, "POST", "/projects/P1/purge",
+                            {"before_period": "2025-01"}, SUP)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["purged"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
